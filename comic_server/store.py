@@ -125,7 +125,7 @@ class Store:
                 raise PermissionError("You already have three active generation jobs.")
             job_id = str(uuid.uuid4())
             db.execute("INSERT INTO jobs (id,username,request_id,payload_hash,payload,status,created,total) VALUES (?,?,?,?,?,'queued',?,?)",
-                (job_id, username, str(request.requestId), fingerprint, payload, time.time(), request.targetPageCount * 4))
+                (job_id, username, str(request.requestId), fingerprint, payload, time.time(), request.targetPageCount * request.panelsPerPage))
             return dict(db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
 
     def job(self, job_id, username=None):

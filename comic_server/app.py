@@ -19,6 +19,7 @@ from .models import GenerationRequest, LoginRequest, Storyboard
 from .provider import OpenAIProvider
 from .store import Store
 from .worker import Worker
+from .layouts import panel_layout
 
 
 def create_app(directory=None, public_url=None, provider=None):
@@ -34,7 +35,7 @@ def create_app(directory=None, public_url=None, provider=None):
         yield
         worker.close()
 
-    app = FastAPI(title="ComicAI Forge", version="1.1.0", lifespan=lifespan)
+    app = FastAPI(title="ComicAI Forge", version="1.2.0", lifespan=lifespan)
     app.state.store = store
     app.state.worker = worker
 
@@ -59,12 +60,13 @@ def create_app(directory=None, public_url=None, provider=None):
         board = Storyboard.model_validate_json(job["plan"])
         expires = int(time.time()) + 86400 * 7
         pages = []
+        request = GenerationRequest.model_validate_json(job["payload"])
+        number = 0
         for page_index, page in enumerate(board.pages):
             panels = []
+            bounds = panel_layout(request.panelsPerPage, request.layoutStyle)
             for index, panel in enumerate(page.panels):
-                number = page_index * 4 + index
                 signature = store.image_signature(job["id"], number, expires)
-                x, y = index % 2, index // 2
                 dialogues = []
                 def add_line(text, speaker, bubble_type, y, trigger="TAP_TO_NEXT", delay=0):
                     order = len(dialogues)
@@ -81,8 +83,8 @@ def create_app(directory=None, public_url=None, provider=None):
                         panel.bubbleType, 0.65, panel.advanceTrigger, panel.durationMillis)
                 panels.append({"panelIndex": index, "description": panel.description, "dialogues": dialogues,
                     "imageUrl": f"{public_url}/v1/images/{job['id']}/{number}.png?expires={expires}&signature={signature}",
-                    "boundingBox": {"xMin": 0.04 + 0.48 * x, "yMin": 0.04 + 0.48 * y,
-                        "xMax": 0.48 + 0.48 * x, "yMax": 0.48 + 0.48 * y}})
+                    "boundingBox": bounds[index]})
+                number += 1
             pages.append({"pageNumber": page_index + 1, "panels": panels})
         request = GenerationRequest.model_validate_json(job["payload"])
         attachments = [{**uploads.metadata(store.upload(str(ref.id), job["username"])),
@@ -101,6 +103,17 @@ def create_app(directory=None, public_url=None, provider=None):
     @app.get("/health")
     def health():
         return {"status": "ok", "generationConfigured": provider.configured}
+
+    @app.get("/v1/capabilities")
+    def capabilities():
+        return {"serverVersion": "1.2.0", "panelsPerPage": [3, 4, 5, 6],
+                "layouts": ["GRID", "CINEMATIC"], "maximumPages": 35}
+
+    @app.get("/v1/mobile-release")
+    def mobile_release():
+        # Advance only after verifying the APK's signature matches the published app.
+        return {"versionCode": 2, "versionName": "0.2.0",
+                "downloadUrl": "https://chatgpt.com/api/library/files/libfile_d9397f8f3fa881919a152912b1128a1a/download"}
 
     @app.post("/v1/login")
     def login(request: LoginRequest):

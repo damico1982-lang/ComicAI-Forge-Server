@@ -19,6 +19,9 @@ class GenerationRequest(StrictModel):
     rawScriptInput: str = Field(min_length=1, max_length=20000)
     selectedArtStyle: str = Field(min_length=1, max_length=100)
     targetPageCount: int = Field(ge=1, le=35, strict=True)
+    panelsPerPage: int = Field(default=4, ge=3, le=6, strict=True)
+    layoutStyle: str = Field(default="GRID", pattern="^(GRID|CINEMATIC)$")
+    continuityNotes: str = Field(default="", max_length=6000)
 
     attachments: list[AttachmentReference] = Field(default_factory=list, max_length=20)
 
@@ -60,14 +63,14 @@ class Storyboard(StrictModel):
     pages: list[StoryPage]
 
 
-def validate_storyboard(board: Storyboard, pages: int):
+def validate_storyboard(board: Storyboard, pages: int, panels_per_page: int = 4):
     if len(board.pages) != pages:
         raise ValueError("Planner returned the wrong page count")
     if not board.characterBible.strip() or len(board.characterBible) > 6000:
         raise ValueError("Invalid continuity guide")
     for page in board.pages:
-        if len(page.panels) != 4:
-            raise ValueError("Planner must return four panels per page")
+        if len(page.panels) != panels_per_page:
+            raise ValueError("Planner returned the wrong number of panels per page")
         for panel in page.panels:
             if not panel.description.strip() or len(panel.description) > 2000:
                 raise ValueError("Invalid panel description")

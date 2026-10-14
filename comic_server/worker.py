@@ -3,7 +3,7 @@ import threading
 import fcntl
 from pathlib import Path
 
-from .models import GenerationRequest, Storyboard
+from .models import GenerationRequest, Storyboard, validate_storyboard
 from .provider import ProviderError
 from .uploads import references
 
@@ -52,7 +52,9 @@ class Worker:
                 board = Storyboard.model_validate_json(job["plan"])
             else:
                 board = self.provider.plan(request, references=reference_files) if reference_files else self.provider.plan(request)
+                validate_storyboard(board, request.targetPageCount, request.panelsPerPage)
                 self.store.update(job_id, plan=board.model_dump_json())
+            validate_storyboard(board, request.targetPageCount, request.panelsPerPage)
             number = 0
             for page in board.pages:
                 for panel in page.panels:

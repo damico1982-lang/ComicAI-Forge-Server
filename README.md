@@ -1,5 +1,11 @@
 # ComicAI Forge — Render server setup
 
+## Server 1.2: flexible comic pages
+
+Generation accepts `panelsPerPage` (3, 4, 5, or 6; default 4), `layoutStyle` (`GRID` or `CINEMATIC`; default `GRID`), and `continuityNotes` (up to 6,000 characters). Older requests and stored four-panel jobs keep their defaults. Progress totals use the selected count, image numbering remains continuous across pages, and result rectangles use the selected layout. Planning uses page ranges of at most five pages with the full script and shared continuity guide, then validates the entire board before requesting artwork.
+
+`GET /v1/capabilities` reports the supported layouts/counts. `GET /v1/mobile-release` advertises only signature-verified published builds. Version 0.3.0 remains a development build until its signature can match the original Android app; the release endpoint intentionally still advertises 0.2.0. Do not advance that manifest to a differently signed or unsigned APK.
+
 This repository contains the Android app's real generation backend, dependency lock, first-login setup, and tests. No API keys, passwords, uploaded photographs, or user database are included.
 
 ## Existing Docker service on Render

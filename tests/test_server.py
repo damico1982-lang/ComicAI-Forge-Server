@@ -34,7 +34,7 @@ class FixtureProvider:
         panel = StoryPanel(description="A test scene", caption="Exact caption", dialogue="Mico: Test dialogue",
             bubbleType="SPEECH", advanceTrigger="TAP_TO_NEXT", durationMillis=0)
         return Storyboard(characterBible="Consistent test character", pages=[
-            StoryPage(panels=[panel.model_copy() for _ in range(4)]) for _ in range(request.targetPageCount)])
+            StoryPage(panels=[panel.model_copy() for _ in range(request.panelsPerPage)]) for _ in range(request.targetPageCount)])
 
     def image(self, *args):
         if self.fail_after is not None and self.images >= self.fail_after:
@@ -236,3 +236,70 @@ def test_expired_session_is_rejected(setup):
     with client.app.state.store.connect() as db:
         db.execute("UPDATE sessions SET expires=0")
     assert client.get("/v1/jobs", headers=headers).status_code == 401
+
+
+@pytest.mark.parametrize("count", [3, 4, 5, 6])
+@pytest.mark.parametrize("layout", ["GRID", "CINEMATIC"])
+def test_panel_choices_persist_download_and_do_not_overlap(setup, count, layout):
+    client, provider = setup
+    headers = auth(client)
+    data = {**payload(2), "panelsPerPage": count, "layoutStyle": layout,
+            "continuityNotes": "Mico wears jersey 12. Keep the same face and clothing."}
+    created = submit(client, data, headers)
+    assert created.status_code == 202
+    job_id = created.json()["jobId"]
+    done = finished(client, job_id, headers)
+    assert done["status"] == "completed"
+    assert done["totalPanels"] == done["completedPanels"] == provider.images == 2 * count
+    urls = []
+    for page in done["result"]["parsedPages"]:
+        assert len(page["panels"]) == count
+        boxes = [p["boundingBox"] for p in page["panels"]]
+        for i, box in enumerate(boxes):
+            assert 0 <= box["xMin"] < box["xMax"] <= 1
+            assert 0 <= box["yMin"] < box["yMax"] <= 1
+            for other in boxes[i + 1:]:
+                assert (box["xMax"] <= other["xMin"] or other["xMax"] <= box["xMin"]
+                        or box["yMax"] <= other["yMin"] or other["yMax"] <= box["yMin"])
+        urls.extend(p["imageUrl"] for p in page["panels"])
+    assert len(set(urls)) == 2 * count
+    assert client.get(urls[-1]).status_code == 200
+    assert submit(client, data, headers).json()["jobId"] == job_id
+    assert submit(client, {**data, "panelsPerPage": 3 if count != 3 else 6}, headers).status_code == 409
+
+
+@pytest.mark.parametrize("value", [2, 7, True, "4"])
+def test_panel_count_rejects_invalid_values(setup, value):
+    client, _ = setup
+    assert submit(client, {**payload(), "panelsPerPage": value}, auth(client)).status_code == 422
+
+
+def test_legacy_request_serialization_stays_compatible():
+    data = payload()
+    assert json.loads(GenerationRequest.model_validate(data).model_dump_json(exclude_defaults=True)) == data
+
+
+def test_long_book_plans_bounded_ranges_with_shared_continuity():
+    calls = []
+    def handler(http_request):
+        body = json.loads(http_request.content)
+        source = json.loads(body["input"])
+        calls.append(source)
+        request = GenerationRequest.model_validate({**payload(source["pageCount"]), "panelsPerPage": source["panelsPerPage"]})
+        board = FixtureProvider().plan(request)
+        return httpx.Response(200, json={"status": "completed", "output": [{"type": "message",
+            "content": [{"type": "output_text", "text": board.model_dump_json()}]}]})
+    provider = OpenAIProvider(api_key="fixture", transport=httpx.MockTransport(handler))
+    board = provider.plan(GenerationRequest.model_validate({**payload(35), "panelsPerPage": 6}))
+    assert len(board.pages) == 35
+    assert sum(len(page.panels) for page in board.pages) == 210
+    assert [call["firstPage"] for call in calls] == [1, 6, 11, 16, 21, 26, 31]
+    assert all(call["pageCount"] == 5 and call["totalBookPages"] == 35 for call in calls)
+    assert calls[1]["continuityGuide"] == board.characterBible
+    assert calls[1]["previousScene"]
+
+
+def test_capabilities_and_published_release_do_not_advertise_unsigned_build(setup):
+    client, _ = setup
+    assert client.get("/v1/capabilities").json()["panelsPerPage"] == [3, 4, 5, 6]
+    assert client.get("/v1/mobile-release").json()["versionCode"] == 2
