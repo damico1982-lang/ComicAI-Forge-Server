@@ -6,6 +6,7 @@ from pathlib import Path
 from .models import GenerationRequest, Storyboard, validate_storyboard
 from .provider import ProviderError
 from .uploads import references
+from .layouts import panel_layout
 
 
 class Worker:
@@ -56,8 +57,9 @@ class Worker:
                 self.store.update(job_id, plan=board.model_dump_json())
             validate_storyboard(board, request.targetPageCount, request.panelsPerPage)
             number = 0
+            bounds = panel_layout(request.panelsPerPage, request.layoutStyle)
             for page in board.pages:
-                for panel in page.panels:
+                for panel_index, panel in enumerate(page.panels):
                     if self.stop.is_set():
                         self.store.update(job_id, status="interrupted", error="Server stopped. Resume to continue from saved panels.")
                         return
@@ -65,7 +67,10 @@ class Worker:
                         return
                     destination = folder / f"{number}.png"
                     if not destination.exists():
-                        content = self.provider.image(panel, board.characterBible, request.selectedArtStyle, references=reference_files) if reference_files else self.provider.image(panel, board.characterBible, request.selectedArtStyle)
+                        box = bounds[panel_index]
+                        ratio = (595 / 842) * (box["xMax"] - box["xMin"]) / (box["yMax"] - box["yMin"])
+                        content = self.provider.image(panel, board.characterBible, request.selectedArtStyle,
+                                                      references=reference_files, aspect_ratio=ratio)
                         temporary = destination.with_suffix(".tmp")
                         temporary.write_bytes(content)
                         temporary.replace(destination)

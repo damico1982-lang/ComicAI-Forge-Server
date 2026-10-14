@@ -112,7 +112,8 @@ class OpenAIProvider:
         except ValueError as exc:
             raise ProviderError("Storyboard failed validation. No panel images were requested.") from exc
 
-    def image(self, panel, bible, style, references=None):
+    def image(self, panel, bible, style, references=None, aspect_ratio=595 / 842):
+        size = "1536x1024" if aspect_ratio >= 1.2 else "1024x1536" if aspect_ratio <= 0.85 else "1024x1024"
         prompt = (
             "Draw one finished comic panel, without borders, lettering, speech balloons or captions. "
             "All text is added separately by the application. Keep important faces inside the central 75% of "
@@ -124,14 +125,14 @@ class OpenAIProvider:
             prompt += "\nUse the attached photos as identity/setting references while composing this NEW scene. Preserve each named person's likeness, facial geometry, skin tone and hairstyle. Do not replace faces with generic characters. Preserve visible architecture in location references.\n"
             for index, ref in enumerate(photos):
                 prompt += f"Photo {index + 1}: {ref['role']} — {ref['label'] or ref['name']}. {ref['notes']}\n"
-            form = {"model": self.image_model, "prompt": prompt, "n": "1", "size": "1024x1536", "quality": "high", "output_format": "png"}
+            form = {"model": self.image_model, "prompt": prompt, "n": "1", "size": size, "quality": "high", "output_format": "png"}
             if self.image_model in {"gpt-image-1", "gpt-image-1.5"}:
                 form["input_fidelity"] = "high"
             response = self._post("images/edits", form,
                 files=[("image[]", (f"reference-{i + 1}.jpg", ref["image"], "image/jpeg")) for i, ref in enumerate(photos)])
         else:
             response = self._post("images/generations", {"model": self.image_model, "prompt": prompt,
-                "n": 1, "size": "1024x1536", "quality": "high", "output_format": "png"})
+                "n": 1, "size": size, "quality": "high", "output_format": "png"})
         try:
             image = base64.b64decode(response["data"][0]["b64_json"], validate=True)
             if len(image) > 30_000_000:

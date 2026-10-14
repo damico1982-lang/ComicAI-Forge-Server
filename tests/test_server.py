@@ -36,7 +36,7 @@ class FixtureProvider:
         return Storyboard(characterBible="Consistent test character", pages=[
             StoryPage(panels=[panel.model_copy() for _ in range(request.panelsPerPage)]) for _ in range(request.targetPageCount)])
 
-    def image(self, *args):
+    def image(self, *args, **kwargs):
         if self.fail_after is not None and self.images >= self.fail_after:
             raise ProviderError("Injected provider failure")
         self.images += 1
@@ -207,11 +207,11 @@ def test_cancel_and_resume_preserves_completed_panel(tmp_path):
             super().__init__()
             self.entered = threading.Event()
             self.release = threading.Event()
-        def image(self, *args):
+        def image(self, *args, **kwargs):
             if self.images == 0:
                 self.entered.set()
                 assert self.release.wait(5)
-            return super().image(*args)
+            return super().image(*args, **kwargs)
     provider = GatedProvider()
     app = create_app(tmp_path, "https://testserver", provider)
     app.state.store.create_user("mico", "long-test-password")
@@ -303,3 +303,13 @@ def test_capabilities_and_published_release_do_not_advertise_unsigned_build(setu
     client, _ = setup
     assert client.get("/v1/capabilities").json()["panelsPerPage"] == [3, 4, 5, 6]
     assert client.get("/v1/mobile-release").json()["versionCode"] == 2
+
+
+@pytest.mark.parametrize("ratio,size", [(0.7, "1024x1536"), (1.0, "1024x1024"), (1.5, "1536x1024")])
+def test_artwork_orientation_matches_panel_shape(ratio, size):
+    def handler(request):
+        assert json.loads(request.content)["size"] == size
+        return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(png()).decode()}]})
+    provider = OpenAIProvider(api_key="fixture", transport=httpx.MockTransport(handler))
+    panel = FixtureProvider().plan(GenerationRequest.model_validate(payload())).pages[0].panels[0]
+    provider.image(panel, "guide", "comic", aspect_ratio=ratio)

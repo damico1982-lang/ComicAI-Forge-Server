@@ -67,7 +67,7 @@ def test_likeness_location_documents_reach_generation_and_restore(setup):
     original_plan, original_image = provider.plan, provider.image
     def plan(request, references=None):
         calls.extend(references or []); return original_plan(request)
-    def image(*args, references=None):
+    def image(*args, references=None, **kwargs):
         images.append(references); return original_image(*args)
     provider.plan, provider.image = plan, image
     portrait = put(client, headers, png(), "Mico-age12.png", "image/png").json()
