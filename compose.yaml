@@ -1,0 +1,30 @@
+services:
+  server:
+    build: .
+    restart: unless-stopped
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
+      COMIC_PUBLIC_URL: https://${COMIC_DOMAIN:?Set COMIC_DOMAIN to your DNS hostname}
+      COMIC_DATA_DIR: /data
+      COMIC_TEXT_MODEL: ${COMIC_TEXT_MODEL:-gpt-4.1-mini}
+      COMIC_IMAGE_MODEL: ${COMIC_IMAGE_MODEL:-gpt-image-1}
+    volumes:
+      - comic_data:/data
+  https:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      COMIC_DOMAIN: ${COMIC_DOMAIN:?Set COMIC_DOMAIN to your DNS hostname}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - server
+volumes:
+  comic_data:
+  caddy_data:
+  caddy_config:

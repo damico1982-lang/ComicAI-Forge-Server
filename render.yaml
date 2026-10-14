@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: comicai-forge-server
+    runtime: python
+    region: virginia
+    plan: 0.5c-512mb
+    numInstances: 1
+    buildCommand: pip install -r requirements.lock.txt
+    startCommand: python -m comic_server.render_start
+    healthCheckPath: /health
+    autoDeployTrigger: off
+    maxShutdownDelaySeconds: 120
+    disk:
+      name: comicai-data
+      mountPath: /var/data
+      sizeGB: 5
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: COMIC_BOOTSTRAP_PASSWORD
+        sync: false
+      - key: COMIC_BOOTSTRAP_USERNAME
+        value: damico
+      - key: COMIC_DATA_DIR
+        value: /var/data/comicai
+      - key: COMIC_TEXT_MODEL
+        value: gpt-4.1-mini
+      - key: COMIC_IMAGE_MODEL
+        value: gpt-image-1
+      - key: WEB_CONCURRENCY
+        value: "1"
+

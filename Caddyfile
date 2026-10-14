@@ -1,0 +1,6 @@
+{$COMIC_DOMAIN} {
+    request_body {
+        max_size 256KB
+    }
+    reverse_proxy server:8000
+}
