@@ -1,6 +1,19 @@
 # ComicAI Forge — Render server setup
 
-This package is the Android app's real generation backend, prepared for a standalone GitHub repository and Render deployment. It includes the complete server source, dependency lock, first-login setup, and tests. It is not deployed yet. No API keys, passwords, uploaded photographs, or user database are included.
+This repository contains the Android app's real generation backend, dependency lock, first-login setup, and tests. No API keys, passwords, uploaded photographs, or user database are included.
+
+## Existing Docker service on Render
+
+Render can automatically select Docker when it finds the Dockerfile. This is supported: the container entrypoint detects Render, uses the Render port and public URL, creates the initial sign-in account, and runs the API as the unprivileged `comic` user. It uses the same locked dependencies as the native Python deployment.
+
+For a manually created Docker web service, configure these in its Dashboard:
+
+- Environment: `OPENAI_API_KEY`, `COMIC_BOOTSTRAP_PASSWORD` (at least 12 characters), `COMIC_BOOTSTRAP_USERNAME=damico`, and `COMIC_DATA_DIR=/var/data/comicai`.
+- Disk: attach a 5 GB persistent disk at `/var/data`. Creating the directory in the image does not provide persistence. Attach the disk before using the app; files created without it will not be copied onto a newly attached disk.
+- Settings: set the health check path to `/health`. Leave Docker Command empty so the image's startup command runs.
+- Keep one instance. A manually created service may enable automatic deployments on commits; check its setting before pushing updates.
+
+The entrypoint prepares only the application data directory and drops root privileges before starting the API. For the Docker Compose management command, use `docker compose exec --user comic server python -m comic_server.manage create-user damico` so database files keep the API user's ownership.
 
 ## First actions on your phone
 

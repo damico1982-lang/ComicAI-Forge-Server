@@ -12,7 +12,7 @@ Requirements: a Linux host with Docker and Compose, a DNS hostname pointing at t
 
 ```bash
 docker compose up --build -d
-docker compose exec server python -m comic_server.manage create-user damico
+docker compose exec --user comic server python -m comic_server.manage create-user damico
 ```
 
 The second command prompts for a password of at least 12 characters, without echoing it. Running it again changes that user's password and revokes their existing sessions. Add other named users through the same command; job access is restricted to its owner.
