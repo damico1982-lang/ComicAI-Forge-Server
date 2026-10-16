@@ -70,17 +70,17 @@ class Storyboard(StrictModel):
 
 def validate_storyboard(board: Storyboard, pages: int, panels_per_page: int = 4, auto: bool = False):
     if len(board.pages) != pages:
-        raise ValueError("Planner returned the wrong page count")
+        raise ValueError(f"Expected {pages} pages, received {len(board.pages)}")
     if not board.characterBible.strip() or len(board.characterBible) > 6000:
         raise ValueError("Invalid continuity guide")
-    for page in board.pages:
+    for page_index, page in enumerate(board.pages, start=1):
         if (auto and not 3 <= len(page.panels) <= 6) or (not auto and len(page.panels) != panels_per_page):
-            raise ValueError("Planner returned the wrong number of panels per page")
-        for panel in page.panels:
+            raise ValueError(f"Page {page_index}: expected {'3-6' if auto else panels_per_page} panels, received {len(page.panels)}")
+        for panel_index, panel in enumerate(page.panels, start=1):
             if not panel.description.strip() or len(panel.description) > 2000:
                 raise ValueError("Invalid panel description")
             if len(panel.caption) > 220:
-                raise ValueError("Panel caption is too long for lettering")
+                raise ValueError(f"Page {page_index}, panel {panel_index}: caption has {len(panel.caption)} characters; maximum 220")
             lines = dialogue_lines(panel.dialogue)
             if len(lines) > 5:
                 raise ValueError("A panel supports up to five speech balloons plus a caption")

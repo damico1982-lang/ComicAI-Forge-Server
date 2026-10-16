@@ -4,7 +4,7 @@ import fcntl
 from pathlib import Path
 
 from .models import GenerationRequest, Storyboard, validate_storyboard
-from .provider import ProviderError
+from .provider import ProviderError, OpenAIProvider
 from .uploads import references
 from .layouts import panel_layout
 from .estimates import revision
@@ -58,7 +58,10 @@ class Worker:
             if job["plan"]:
                 board = Storyboard.model_validate_json(job["plan"])
             else:
-                board = self.provider.plan(request, references=reference_files) if reference_files else self.provider.plan(request)
+                if isinstance(self.provider, OpenAIProvider):
+                    board = self.provider.plan(request, references=reference_files, checkpoint_path=folder / "storyboard.checkpoint.json")
+                else:
+                    board = self.provider.plan(request, references=reference_files) if reference_files else self.provider.plan(request)
                 validate_storyboard(board, request.targetPageCount, request.panelsPerPage, request.autoPanelCount)
                 self.store.update(job_id, plan=board.model_dump_json())
             validate_storyboard(board, request.targetPageCount, request.panelsPerPage, request.autoPanelCount)
