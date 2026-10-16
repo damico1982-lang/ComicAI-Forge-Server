@@ -37,7 +37,7 @@ def create_app(directory=None, public_url=None, provider=None):
         worker.close()
         app.state.print_executor.shutdown(wait=False,cancel_futures=True)
 
-    app = FastAPI(title="ComicAI Forge", version="1.3.3", lifespan=lifespan)
+    app = FastAPI(title="ComicAI Forge", version="1.3.4", lifespan=lifespan)
     app.state.store = store
     app.state.worker = worker
 
@@ -118,7 +118,7 @@ def create_app(directory=None, public_url=None, provider=None):
 
     @app.get("/v1/capabilities")
     def capabilities():
-        return {"serverVersion": "1.3.3", "storyboardApproval": True, "autoPanelCount": True, "styleReferences": True, "cmykPrintExport": True, "characterVision": True, "panelsPerPage": [3, 4, 5, 6],
+        return {"serverVersion": "1.3.4", "storyboardApproval": True, "autoPanelCount": True, "styleReferences": True, "cmykPrintExport": True, "characterVision": True, "panelsPerPage": [3, 4, 5, 6],
                 "layouts": ["GRID", "CINEMATIC"], "maximumPages": 35, "maximumScriptCharacters": 200000, "multiSpeakerBalloons": True}
 
     @app.get("/v1/mobile-release")
@@ -126,6 +126,11 @@ def create_app(directory=None, public_url=None, provider=None):
         # Advance only after verifying the APK's signature matches the published app.
         return {"versionCode": 2, "versionName": "0.2.0",
                 "downloadUrl": "https://chatgpt.com/api/library/files/libfile_d9397f8f3fa881919a152912b1128a1a/download"}
+
+    @app.get("/v1/mobile-release/next")
+    def next_mobile_release():
+        from .mobile_release import NEXT_RELEASE
+        return NEXT_RELEASE
 
     @app.post("/v1/login")
     def login(request: LoginRequest):
@@ -225,6 +230,10 @@ def create_app(directory=None, public_url=None, provider=None):
                 for job in db.execute("SELECT payload FROM jobs WHERE username=?", (username,)):
                     if any(str(ref.id) == str(upload_id) for ref in GenerationRequest.model_validate_json(job["payload"]).attachments):
                         raise HTTPException(409, "This file is retained by a generation job")
+                for export in db.execute("SELECT payload FROM print_exports WHERE username=? AND status IN ('queued','running')", (username,)):
+                    payload = json.loads(export["payload"])
+                    if str(upload_id) in [*payload["pages"],payload["iccProfile"]]:
+                        raise HTTPException(409, "This file is in use by an active print export")
                 db.execute("DELETE FROM uploads WHERE id=?", (str(upload_id),))
                 (store.uploads / row["disk_name"]).unlink(missing_ok=True)
         return Response(status_code=204)

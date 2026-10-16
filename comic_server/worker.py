@@ -1,5 +1,6 @@
 import json
 import threading
+import logging
 import fcntl
 from pathlib import Path
 
@@ -79,7 +80,7 @@ class Worker:
                 bounds = panel_layout(len(page.panels), request.layoutStyle)
                 for panel_index, panel in enumerate(page.panels):
                     if self.stop.is_set():
-                        self.store.update(job_id, status="interrupted", error="Server stopped. Resume to continue from saved panels.")
+                        self._transition(job_id,"interrupted","Server stopped. Resume to continue from saved panels.")
                         return
                     if self.store.job(job_id)["status"] != "running":
                         return
@@ -105,12 +106,16 @@ class Worker:
                             tmp=analysis_file.with_suffix(".tmp");tmp.write_text(json.dumps(analysis));tmp.replace(analysis_file)
                     number += 1
                     self.store.update(job_id, completed=number)
-            if self.store.job(job_id)["status"] == "running":
-                self.store.update(job_id, status="completed", error=None)
+            self._transition(job_id,"completed",None)
         except ProviderError as exc:
-            if self.store.job(job_id)["status"] == "running":
-                self.store.update(job_id, status="failed", error=str(exc))
-        except Exception:
-            if self.store.job(job_id)["status"] == "running":
-                self.store.update(job_id, status="failed", error="Generation failed. Check server logs and available storage before resuming.")
+            self._transition(job_id,"failed",str(exc))
+        except Exception as exc:
+            # Log the category without script text, credentials or provider bodies.
+            logging.getLogger(__name__).error("Generation job %s failed (%s)",job_id,type(exc).__name__)
+            self._transition(job_id,"failed","Generation failed. Check server logs and available storage before resuming.")
+
+    def _transition(self,job_id,status,error):
+        # Cancellation may happen while a provider request is finishing.
+        with self.store.connect() as db:
+            db.execute("UPDATE jobs SET status=?,error=? WHERE id=? AND status='running'",(status,error,job_id))
 

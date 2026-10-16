@@ -60,7 +60,6 @@ def register_print_routes(app,store,user):
     def start_print(request:PrintRequest,username=Depends(user)):
         if request.dpi not in (300,600):raise HTTPException(422,"Choose 300 or 600 DPI")
         if len(set(request.pages))!=len(request.pages):raise HTTPException(422,"Print page IDs must be distinct")
-        if any(store.upload(str(i),username) is None for i in [*request.pages,request.iccProfile]):raise HTTPException(404,"A print page or ICC profile is missing")
         payload=request.model_dump_json()
         with store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -68,6 +67,8 @@ def register_print_routes(app,store,user):
             if existing:
                 if existing["payload"]!=payload:raise HTTPException(409,"Print request ID was reused for different content")
                 return summary(dict(existing))
+            if any(db.execute("SELECT 1 FROM uploads WHERE id=? AND username=?",(str(i),username)).fetchone() is None for i in [*request.pages,request.iccProfile]):
+                raise HTTPException(404,"A print page or ICC profile is missing")
             if db.execute("SELECT COUNT(*) FROM print_exports WHERE status IN ('queued','running')").fetchone()[0]>=2:raise HTTPException(429,"Two print exports are already active")
             export_id=str(UUID(bytes=secrets.token_bytes(16),version=4))
             db.execute("INSERT INTO print_exports VALUES (?,?,?,?,'queued',NULL,NULL,?)",(export_id,username,str(request.requestId),payload,time.time()))
