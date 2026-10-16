@@ -11,7 +11,7 @@ class AttachmentReference(StrictModel):
     useForAi: bool = False
     label: str = Field(default="", max_length=100)
     notes: str = Field(default="", max_length=500)
-    role: str = Field(default="DOCUMENT", pattern="^(CHARACTER|LOCATION|DOCUMENT)$")
+    role: str = Field(default="DOCUMENT", pattern="^(CHARACTER|LOCATION|DOCUMENT|STYLE)$")
 
 
 class GenerationRequest(StrictModel):
@@ -22,6 +22,11 @@ class GenerationRequest(StrictModel):
     panelsPerPage: int = Field(default=4, ge=3, le=6, strict=True)
     layoutStyle: str = Field(default="GRID", pattern="^(GRID|CINEMATIC)$")
     continuityNotes: str = Field(default="", max_length=6000)
+
+    requireArtworkApproval: bool = False
+    autoPanelCount: bool = False
+    analyzeBalloonSpace: bool = False
+    compareCharacterFaces: bool = False
 
     attachments: list[AttachmentReference] = Field(default_factory=list, max_length=20)
 
@@ -63,13 +68,13 @@ class Storyboard(StrictModel):
     pages: list[StoryPage]
 
 
-def validate_storyboard(board: Storyboard, pages: int, panels_per_page: int = 4):
+def validate_storyboard(board: Storyboard, pages: int, panels_per_page: int = 4, auto: bool = False):
     if len(board.pages) != pages:
         raise ValueError("Planner returned the wrong page count")
     if not board.characterBible.strip() or len(board.characterBible) > 6000:
         raise ValueError("Invalid continuity guide")
     for page in board.pages:
-        if len(page.panels) != panels_per_page:
+        if (auto and not 3 <= len(page.panels) <= 6) or (not auto and len(page.panels) != panels_per_page):
             raise ValueError("Planner returned the wrong number of panels per page")
         for panel in page.panels:
             if not panel.description.strip() or len(panel.description) > 2000:
@@ -86,3 +91,14 @@ def validate_storyboard(board: Storyboard, pages: int, panels_per_page: int = 4)
                 raise ValueError("Unsupported advance trigger")
             if panel.durationMillis < 0 or (panel.advanceTrigger == "AUTO_TIMED" and not 500 <= panel.durationMillis <= 60000):
                 raise ValueError("Invalid dialogue timing")
+
+
+
+class StoryboardEdit(StrictModel):
+    expectedRevision: str = Field(pattern="^[a-f0-9]{64}$")
+    storyboard: Storyboard
+
+
+class ArtworkApproval(StrictModel):
+    revision: str = Field(pattern="^[a-f0-9]{64}$")
+    approvedEstimateHigh: str = Field(pattern=r"^\d{1,5}\.\d{2}$")

@@ -7,11 +7,13 @@ from .models import GenerationRequest, Storyboard, validate_storyboard
 from .provider import ProviderError
 from .uploads import references
 from .layouts import panel_layout
+from .estimates import revision
 
 
 class Worker:
     def __init__(self, store, provider):
         self.store, self.provider = store, provider
+        self.vision = None
         self.stop = threading.Event()
         self.wake = threading.Event()
         self.thread = threading.Thread(target=self.run, name="comic-generation", daemon=True)
@@ -43,6 +45,10 @@ class Worker:
             self.process(job)
 
     def process(self, job):
+        with self.store.resource_lock:
+            return self._process(job)
+
+    def _process(self, job):
         job_id = job["id"]
         folder = self.store.assets / job_id
         folder.mkdir(exist_ok=True)
@@ -53,12 +59,21 @@ class Worker:
                 board = Storyboard.model_validate_json(job["plan"])
             else:
                 board = self.provider.plan(request, references=reference_files) if reference_files else self.provider.plan(request)
-                validate_storyboard(board, request.targetPageCount, request.panelsPerPage)
+                validate_storyboard(board, request.targetPageCount, request.panelsPerPage, request.autoPanelCount)
                 self.store.update(job_id, plan=board.model_dump_json())
-            validate_storyboard(board, request.targetPageCount, request.panelsPerPage)
+            validate_storyboard(board, request.targetPageCount, request.panelsPerPage, request.autoPanelCount)
+            total = sum(len(page.panels) for page in board.pages)
+            self.store.update(job_id, total=total)
+            if request.requireArtworkApproval:
+                approval = self.store.approval(job_id)
+                if not approval or approval["revision"] != revision(board.model_dump_json()):
+                    # A cancelled planning job must never become actionable again.
+                    with self.store.connect() as db:
+                        db.execute("UPDATE jobs SET status='awaiting_approval', error=NULL WHERE id=? AND status='running'", (job_id,))
+                    return
             number = 0
-            bounds = panel_layout(request.panelsPerPage, request.layoutStyle)
             for page in board.pages:
+                bounds = panel_layout(len(page.panels), request.layoutStyle)
                 for panel_index, panel in enumerate(page.panels):
                     if self.stop.is_set():
                         self.store.update(job_id, status="interrupted", error="Server stopped. Resume to continue from saved panels.")
@@ -74,6 +89,17 @@ class Worker:
                         temporary = destination.with_suffix(".tmp")
                         temporary.write_bytes(content)
                         temporary.replace(destination)
+                    if request.analyzeBalloonSpace or request.compareCharacterFaces:
+                        analysis_file=folder / f"{number}.analysis.json"
+                        if not analysis_file.exists():
+                            try:
+                                from .vision import CharacterVision
+                                if self.vision is None:
+                                    self.vision=CharacterVision(self.store)
+                                analysis=self.vision.analyze(destination.read_bytes(),panel,job["username"],request.attachments,request.compareCharacterFaces,job_id,number)
+                            except Exception:
+                                analysis={"protectedRegions":[],"balloons":[],"characterChecks":[],"reviewRequired":True,"notice":"Vision analysis was unavailable. Review faces and lettering manually."}
+                            tmp=analysis_file.with_suffix(".tmp");tmp.write_text(json.dumps(analysis));tmp.replace(analysis_file)
                     number += 1
                     self.store.update(job_id, completed=number)
             if self.store.job(job_id)["status"] == "running":
@@ -84,3 +110,4 @@ class Worker:
         except Exception:
             if self.store.job(job_id)["status"] == "running":
                 self.store.update(job_id, status="failed", error="Generation failed. Check server logs and available storage before resuming.")
+

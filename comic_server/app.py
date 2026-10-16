@@ -15,7 +15,8 @@ from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 from . import uploads
 
-from .models import GenerationRequest, LoginRequest, Storyboard
+from .models import GenerationRequest, LoginRequest, Storyboard, StoryboardEdit, ArtworkApproval, validate_storyboard
+from .estimates import quote, revision
 from .provider import OpenAIProvider
 from .store import Store
 from .worker import Worker
@@ -34,8 +35,9 @@ def create_app(directory=None, public_url=None, provider=None):
         worker.start()
         yield
         worker.close()
+        app.state.print_executor.shutdown(wait=False,cancel_futures=True)
 
-    app = FastAPI(title="ComicAI Forge", version="1.2.0", lifespan=lifespan)
+    app = FastAPI(title="ComicAI Forge", version="1.3.0", lifespan=lifespan)
     app.state.store = store
     app.state.worker = worker
 
@@ -64,26 +66,33 @@ def create_app(directory=None, public_url=None, provider=None):
         number = 0
         for page_index, page in enumerate(board.pages):
             panels = []
-            bounds = panel_layout(request.panelsPerPage, request.layoutStyle)
+            bounds = panel_layout(len(page.panels), request.layoutStyle)
             for index, panel in enumerate(page.panels):
                 signature = store.image_signature(job["id"], number, expires)
+                analysis_file=store.assets/job["id"]/f"{number}.analysis.json"
+                analysis=json.loads(analysis_file.read_text()) if analysis_file.is_file() else {}
                 dialogues = []
-                def add_line(text, speaker, bubble_type, y, trigger="TAP_TO_NEXT", delay=0):
+                def add_line(text, speaker, bubble_type, y, trigger="TAP_TO_NEXT", delay=0, slot=0):
                     order = len(dialogues)
+                    suggested=(analysis.get("balloons") or [None,None])
+                    placement=suggested[slot] if len(suggested)>slot and suggested[slot] else {}
+                    x=placement.get("x",.05); y=placement.get("y",y)
                     dialogues.append({"id": f"{job['id']}-{number}-{order}",
                         "speaker": {"speakerId": hashlib.sha256(speaker.casefold().encode()).hexdigest()[:24], "name": speaker},
                         "textManifest": {"primaryLine": text, "expandedNarration": panel.description},
-                        "telemetry": {"order": order, "layoutStyle": bubble_type, "xRatio": 0.05, "yRatio": y},
+                        "telemetry": {"order": order, "layoutStyle": bubble_type, "xRatio": x, "yRatio": y, "autoPlace": bool(placement), "widthRatio": placement.get("width",.72)},
                         "advanceCues": {"triggerType": trigger, "autoDelayMs": delay, "stepIndex": order}})
                 if panel.caption.strip():
                     add_line(panel.caption, "Narrator", "THOUGHT", 0.04)
                 if panel.dialogue.strip():
                     speaker, separator, line = panel.dialogue.partition(":")
                     add_line(line.strip() if separator else panel.dialogue, speaker.strip() if separator else "Speaker",
-                        panel.bubbleType, 0.65, panel.advanceTrigger, panel.durationMillis)
+                        panel.bubbleType, 0.65, panel.advanceTrigger, panel.durationMillis, slot=1)
                 panels.append({"panelIndex": index, "description": panel.description, "dialogues": dialogues,
                     "imageUrl": f"{public_url}/v1/images/{job['id']}/{number}.png?expires={expires}&signature={signature}",
-                    "boundingBox": bounds[index]})
+                    "boundingBox": bounds[index], "protectedRegions": analysis.get("protectedRegions",[]),
+                    "qualityNotes": ([analysis.get("notice","")] if analysis.get("reviewRequired") else []) +
+                        [f"{c['character']}: {c['status']}" for c in analysis.get("characterChecks",[])]})
                 number += 1
             pages.append({"pageNumber": page_index + 1, "panels": panels})
         request = GenerationRequest.model_validate_json(job["payload"])
@@ -96,6 +105,10 @@ def create_app(directory=None, public_url=None, provider=None):
         data = {"jobId": job["id"], "status": job["status"],
             "completedPanels": job["completed"], "totalPanels": job["total"], "error": job["error"],
             "title": json.loads(job["payload"])["rawScriptInput"][:60]}
+        request = GenerationRequest.model_validate_json(job["payload"])
+        if include_result and job["plan"] and request.requireArtworkApproval:
+            board = Storyboard.model_validate_json(job["plan"])
+            data.update(storyboard=board.model_dump(), revision=revision(job["plan"]), estimate=quote(request,board,provider,job["completed"]))
         if include_result and job["status"] == "completed":
             data["result"] = result(job)
         return data
@@ -106,7 +119,7 @@ def create_app(directory=None, public_url=None, provider=None):
 
     @app.get("/v1/capabilities")
     def capabilities():
-        return {"serverVersion": "1.2.0", "panelsPerPage": [3, 4, 5, 6],
+        return {"serverVersion": "1.3.0", "storyboardApproval": True, "autoPanelCount": True, "styleReferences": True, "cmykPrintExport": True, "characterVision": True, "panelsPerPage": [3, 4, 5, 6],
                 "layouts": ["GRID", "CINEMATIC"], "maximumPages": 35}
 
     @app.get("/v1/mobile-release")
@@ -253,6 +266,126 @@ def create_app(directory=None, public_url=None, provider=None):
     def get_job(job_id: UUID, username=Depends(user)):
         return summary(owned(job_id, username), True)
 
+    @app.post("/v1/jobs/{job_id}/storyboard")
+    def edit_storyboard(job_id: UUID, body: StoryboardEdit, username=Depends(user)):
+        with store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM jobs WHERE id=? AND username=?", (str(job_id),username)).fetchone()
+            if not row:
+                raise HTTPException(404,"Job not found")
+            job=dict(row)
+            if job["status"] != "awaiting_approval" or not job["plan"] or job["completed"]:
+                raise HTTPException(409,"Only an unstarted storyboard waiting for approval can be edited")
+            if revision(job["plan"]) != body.expectedRevision:
+                raise HTTPException(409,"Storyboard changed. Refresh before saving")
+            request=GenerationRequest.model_validate_json(job["payload"])
+            try:
+                validate_storyboard(body.storyboard,request.targetPageCount,request.panelsPerPage,request.autoPanelCount)
+            except ValueError as exc:
+                raise HTTPException(422,str(exc)) from exc
+            db.execute("DELETE FROM artwork_approvals WHERE job_id=?",(str(job_id),))
+            db.execute("UPDATE jobs SET plan=?, total=? WHERE id=?",(body.storyboard.model_dump_json(),sum(len(p.panels) for p in body.storyboard.pages),str(job_id)))
+        return summary(owned(job_id,username),True)
+
+    @app.post("/v1/jobs/{job_id}/approve")
+    def approve_artwork(job_id: UUID, body: ArtworkApproval, username=Depends(user)):
+        from decimal import Decimal
+        with store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row=db.execute("SELECT * FROM jobs WHERE id=? AND username=?",(str(job_id),username)).fetchone()
+            if not row:
+                raise HTTPException(404,"Job not found")
+            job=dict(row)
+            if not job["plan"] or revision(job["plan"]) != body.revision:
+                raise HTTPException(409,"Storyboard changed. Review the new estimate")
+            existing=db.execute("SELECT * FROM artwork_approvals WHERE job_id=?",(str(job_id),)).fetchone()
+            if existing and existing["revision"]==body.revision and job["status"] in {"queued","running","completed"}:
+                return summary(job,True)
+            if job["status"] != "awaiting_approval":
+                raise HTTPException(409,"This job is not awaiting artwork approval")
+            request=GenerationRequest.model_validate_json(job["payload"])
+            estimate=quote(request,Storyboard.model_validate_json(job["plan"]),provider,job["completed"])
+            if not estimate["available"]:
+                raise HTTPException(422,estimate["reason"])
+            if Decimal(body.approvedEstimateHigh)<Decimal(estimate["estimatedHigh"]):
+                raise HTTPException(422,"Approved estimate is below the current estimate")
+            active=db.execute("SELECT COUNT(*) FROM jobs WHERE username=? AND status IN ('queued','running')",(username,)).fetchone()[0]
+            if active>=3:
+                raise HTTPException(429,"Three generation jobs are already active")
+            db.execute("INSERT OR REPLACE INTO artwork_approvals VALUES (?,?,?,?)",(str(job_id),body.revision,json.dumps(estimate),time.time()))
+            db.execute("UPDATE jobs SET status='queued', error=NULL WHERE id=?",(str(job_id),))
+        worker.wake.set()
+        return summary(owned(job_id,username),True)
+
+    from pydantic import BaseModel, Field
+    class FaceReviewRequest(BaseModel):
+        label: str = Field(min_length=1,max_length=100)
+        faceIndex: int = Field(ge=0,le=11,strict=True)
+    class FaceAnalysisRequest(BaseModel):
+        compareFaces: bool = False
+
+    @app.get("/v1/jobs/{job_id}/faces/{index}")
+    def get_face_review(job_id: UUID,index:int,username=Depends(user)):
+        owned(job_id,username)
+        if index<0 or index>210:raise HTTPException(404,"Panel not found")
+        path=store.assets/str(job_id)/f"{index}.analysis.json"
+        return json.loads(path.read_text()) if path.is_file() else {"protectedRegions":[],"characterChecks":[],"characterNames":[],"notice":"Checks have not been run for this panel.","reviewRequired":True}
+
+    @app.post("/v1/jobs/{job_id}/faces/{index}/analyze")
+    async def run_face_review(job_id:UUID,index:int,body:FaceAnalysisRequest,username=Depends(user)):
+        job=owned(job_id,username)
+        if job["status"]!="completed":raise HTTPException(409,"Wait for completed artwork before analysis")
+        board=Storyboard.model_validate_json(job["plan"]);panels=[p for page in board.pages for p in page.panels]
+        if not 0<=index<len(panels):raise HTTPException(404,"Panel not found")
+        request=GenerationRequest.model_validate_json(job["payload"])
+        from .vision import CharacterVision
+        if store.resource_lock.locked():raise HTTPException(409,"Wait for generation or print conversion before manual face analysis")
+        # Manual checks own their detector; the worker owns a separate stateful network.
+        async with upload_lock:
+            def analyze():
+                with store.resource_lock:
+                    return analyze_locked()
+            def analyze_locked():
+                vision=CharacterVision(store)
+                result=vision.analyze((store.assets/str(job_id)/f"{index}.png").read_bytes(),panels[index],username,request.attachments,body.compareFaces,str(job_id),index)
+                target=store.assets/str(job_id)/f"{index}.analysis.json";temporary=target.with_suffix(".review.tmp");temporary.write_text(json.dumps(result));temporary.replace(target)
+                return result
+            return await run_in_threadpool(analyze)
+
+    @app.post("/v1/jobs/{job_id}/faces/{index}/approve")
+    def approve_face_review(job_id:UUID,index:int,body:FaceReviewRequest,username=Depends(user)):
+        job=owned(job_id,username);request=GenerationRequest.model_validate_json(job["payload"])
+        names={r.label for r in request.attachments if r.useForAi and r.role=="CHARACTER"}
+        if body.label not in names:raise HTTPException(422,"Choose a character named in this job's references")
+        with store.connect() as db:
+            exists=db.execute("SELECT 1 FROM sqlite_master WHERE name='generated_face_embeddings'").fetchone()
+            row=db.execute("SELECT * FROM generated_face_embeddings WHERE username=? AND job_id=? AND panel_index=? AND face_index=?",(username,str(job_id),index,body.faceIndex)).fetchone() if exists else None
+            if not row:raise HTTPException(422,"Run the opt-in face comparison before approving a detected face")
+            db.execute("INSERT OR REPLACE INTO approved_character_faces VALUES (?,?,?,?,?,?)",(username,body.label,row["model"],row["vector"],str(job_id),body.faceIndex))
+        return {"status":"approved_by_user","character":body.label,"notice":"Saved as your approved reference for future similarity review; this is your judgment, not a model verification."}
+
+    @app.delete("/v1/character-embeddings",status_code=204)
+    def delete_embeddings(username=Depends(user)):
+        with store.connect() as db:
+            found=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='character_embeddings'").fetchone()
+            if found:
+                db.execute("DELETE FROM character_embeddings WHERE username=?",(username,))
+            for table in ("generated_face_embeddings","approved_character_faces"):
+                if db.execute("SELECT 1 FROM sqlite_master WHERE name=?",(table,)).fetchone():
+                    db.execute("DELETE FROM "+table+" WHERE username=?",(username,))
+        return Response(status_code=204)
+
+    @app.get("/v1/storage")
+    def storage(username=Depends(user)):
+        import shutil
+        disk=shutil.disk_usage(store.directory)
+        with store.connect() as db:
+            uploads_bytes=db.execute("SELECT COALESCE(SUM(size),0) FROM uploads WHERE username=?",(username,)).fetchone()[0]
+        return {"diskTotalBytes":disk.total,"diskUsedBytes":disk.used,"diskFreeBytes":disk.free,
+                "accountUploadBytes":uploads_bytes,"accountUploadQuotaBytes":uploads.MAX_USER_BYTES,
+                "checkedAt":int(time.time()),"creditBalance":None,
+                "notice":"Server disk usage is separate from AI credits. No live provider credit balance is available through this API."}
+
     @app.post("/v1/jobs/{job_id}/cancel")
     def cancel(job_id: UUID, username=Depends(user)):
         owned(job_id, username)
@@ -284,4 +417,7 @@ def create_app(directory=None, public_url=None, provider=None):
             raise HTTPException(404, "Image not found")
         return FileResponse(file, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
 
+    from .print_routes import register_print_routes
+    register_print_routes(app,store,user)
     return app
+

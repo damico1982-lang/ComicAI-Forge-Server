@@ -4,12 +4,14 @@ import json
 import secrets
 import sqlite3
 import time
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 
 
 class Store:
     def __init__(self, directory):
+        self.resource_lock = threading.Lock()
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.path = self.directory / "comics.sqlite3"
@@ -31,6 +33,8 @@ class Store:
                     name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL,
                     sha256 TEXT NOT NULL, disk_name TEXT NOT NULL, kind TEXT NOT NULL, notice TEXT);
                 CREATE INDEX IF NOT EXISTS uploads_owner ON uploads(username);
+                CREATE TABLE IF NOT EXISTS artwork_approvals (
+                    job_id TEXT PRIMARY KEY, revision TEXT NOT NULL, estimate TEXT NOT NULL, approved_at REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY, username TEXT NOT NULL REFERENCES users(username),
                     request_id TEXT NOT NULL, payload_hash TEXT NOT NULL, payload TEXT NOT NULL,
@@ -144,7 +148,7 @@ class Store:
             return dict(row)
 
     def update(self, job_id, **values):
-        if not set(values) <= {"status", "completed", "plan", "error"}:
+        if not set(values) <= {"status", "completed", "plan", "error", "total"}:
             raise ValueError("Unknown job update")
         with self.connect() as db:
             db.execute("UPDATE jobs SET " + ",".join(key + "=?" for key in values) + " WHERE id=?", (*values.values(), job_id))
@@ -169,7 +173,7 @@ class Store:
 
     def cancel(self, job_id, username):
         with self.connect() as db:
-            cursor = db.execute("UPDATE jobs SET status='cancelled', error='Cancelled by user.' WHERE id=? AND username=? AND status IN ('queued','running')", (job_id, username))
+            cursor = db.execute("UPDATE jobs SET status='cancelled', error='Cancelled by user.' WHERE id=? AND username=? AND status IN ('queued','running','awaiting_approval')", (job_id, username))
             return cursor.rowcount > 0
 
     def image_signature(self, job_id, index, expires):
@@ -178,4 +182,10 @@ class Store:
     def upload(self, upload_id, username):
         with self.connect() as db:
             row = db.execute("SELECT * FROM uploads WHERE id=? AND username=?", (upload_id, username)).fetchone()
+            return dict(row) if row else None
+
+
+    def approval(self, job_id):
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM artwork_approvals WHERE job_id=?", (job_id,)).fetchone()
             return dict(row) if row else None
