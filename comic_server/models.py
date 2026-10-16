@@ -52,11 +52,13 @@ class LoginRequest(StrictModel):
 
 class StoryPanel(StrictModel):
     description: str
-    caption: str
-    dialogue: str
-    bubbleType: str
-    advanceTrigger: str
-    durationMillis: int
+    # Kotlin serialization omits properties equal to their declared defaults.
+    # Match the phone defaults when accepting an edited storyboard.
+    caption: str = ""
+    dialogue: str = ""
+    bubbleType: str = "SPEECH"
+    advanceTrigger: str = "TAP_TO_NEXT"
+    durationMillis: int = 0
 
 
 class StoryPage(StrictModel):

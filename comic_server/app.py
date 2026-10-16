@@ -37,7 +37,7 @@ def create_app(directory=None, public_url=None, provider=None):
         worker.close()
         app.state.print_executor.shutdown(wait=False,cancel_futures=True)
 
-    app = FastAPI(title="ComicAI Forge", version="1.3.2", lifespan=lifespan)
+    app = FastAPI(title="ComicAI Forge", version="1.3.3", lifespan=lifespan)
     app.state.store = store
     app.state.worker = worker
 
@@ -118,7 +118,7 @@ def create_app(directory=None, public_url=None, provider=None):
 
     @app.get("/v1/capabilities")
     def capabilities():
-        return {"serverVersion": "1.3.2", "storyboardApproval": True, "autoPanelCount": True, "styleReferences": True, "cmykPrintExport": True, "characterVision": True, "panelsPerPage": [3, 4, 5, 6],
+        return {"serverVersion": "1.3.3", "storyboardApproval": True, "autoPanelCount": True, "styleReferences": True, "cmykPrintExport": True, "characterVision": True, "panelsPerPage": [3, 4, 5, 6],
                 "layouts": ["GRID", "CINEMATIC"], "maximumPages": 35, "maximumScriptCharacters": 200000, "multiSpeakerBalloons": True}
 
     @app.get("/v1/mobile-release")

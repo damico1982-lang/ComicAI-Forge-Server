@@ -116,6 +116,26 @@ def test_artwork_requires_saved_revision_approval_and_stale_edits_are_rejected(t
         assert provider.images==3
 
 
+def test_phone_storyboard_save_accepts_omitted_kotlin_defaults_without_artwork(tmp_path):
+    provider=ReviewProvider();app=create_app(tmp_path,"https://example.com",provider)
+    app.state.store.create_user("damico","private-test-password")
+    with TestClient(app) as client:
+        token=client.post("/v1/login",json={"username":"damico","password":"private-test-password"}).json()["accessToken"]
+        client.headers["Authorization"]="Bearer "+token
+        key=str(uuid.uuid4());body={"requestId":key,"rawScriptInput":"Mico and Cynika talk.","selectedArtStyle":"Comic","targetPageCount":1,"panelsPerPage":4,"requireArtworkApproval":True}
+        job_id=client.post("/v1/jobs",json=body,headers={"Idempotency-Key":key}).json()["jobId"]
+        job=until(client,job_id,"awaiting_approval");board=job["storyboard"]
+        for panel in board["pages"][0]["panels"]:
+            panel.pop("bubbleType");panel.pop("advanceTrigger");panel.pop("durationMillis")
+        first=board["pages"][0]["panels"][0]
+        first.pop("caption");first.pop("dialogue");first["description"]="Edited silent panel."
+        edited=client.post(f"/v1/jobs/{job_id}/storyboard",json={"expectedRevision":job["revision"],"storyboard":board})
+        assert edited.status_code==200,edited.text
+        panel=edited.json()["storyboard"]["pages"][0]["panels"][0]
+        assert panel["bubbleType"]=="SPEECH" and panel["durationMillis"]==0 and panel["caption"]==panel["dialogue"]==""
+        assert edited.json()["revision"]!=job["revision"] and provider.images==0
+
+
 def test_free_space_search_considers_entire_rectangles():
     out=io.BytesIO();Image.new("RGB",(160,240),"white").save(out,"PNG")
     face=[.1,.05,.9,.45]
