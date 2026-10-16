@@ -8,3 +8,6 @@ data/
 *.sqlite3*
 *.key
 
+
+# Licensed model weights are downloaded and verified during the Docker build.
+comic_server/vision_models/*.onnx

@@ -16,7 +16,7 @@ class AttachmentReference(StrictModel):
 
 class GenerationRequest(StrictModel):
     requestId: UUID
-    rawScriptInput: str = Field(min_length=1, max_length=20000)
+    rawScriptInput: str = Field(min_length=1, max_length=200000)
     selectedArtStyle: str = Field(min_length=1, max_length=100)
     targetPageCount: int = Field(ge=1, le=35, strict=True)
     panelsPerPage: int = Field(default=4, ge=3, le=6, strict=True)
@@ -79,12 +79,14 @@ def validate_storyboard(board: Storyboard, pages: int, panels_per_page: int = 4,
         for panel in page.panels:
             if not panel.description.strip() or len(panel.description) > 2000:
                 raise ValueError("Invalid panel description")
-            if len(panel.caption) > 220 or len(panel.dialogue) > 220:
-                raise ValueError("Panel text is too long for lettering")
-            if panel.dialogue.strip():
-                speaker, separator, line = panel.dialogue.partition(":")
-                if not separator or not speaker.strip() or len(speaker.strip()) > 80 or not line.strip():
-                    raise ValueError("Dialogue must name a speaker and contain a line")
+            if len(panel.caption) > 220:
+                raise ValueError("Panel caption is too long for lettering")
+            lines = dialogue_lines(panel.dialogue)
+            if len(lines) > 5:
+                raise ValueError("A panel supports up to five speech balloons plus a caption")
+            for speaker, line in lines:
+                if not speaker.strip() or len(speaker) > 80 or not line.strip() or len(line) > 220:
+                    raise ValueError("Each dialogue line needs a speaker and 1-220 characters of text")
             if panel.bubbleType not in {"SPEECH", "THOUGHT", "WHISPER", "SHOUT"}:
                 raise ValueError("Unsupported bubble type")
             if panel.advanceTrigger not in {"TAP_TO_NEXT", "AUTO_TIMED", "MANUAL_SWIPE"}:
@@ -102,3 +104,20 @@ class StoryboardEdit(StrictModel):
 class ArtworkApproval(StrictModel):
     revision: str = Field(pattern="^[a-f0-9]{64}$")
     approvedEstimateHigh: str = Field(pattern=r"^\d{1,5}\.\d{2}$")
+
+
+def dialogue_lines(value: str):
+    result = []
+    for raw in value.splitlines():
+        if not raw.strip():
+            continue
+        speaker, separator, line = raw.partition(":")
+        if not separator:
+            # Old saved jobs may wrap a single speaker's line across newlines.
+            if not result:
+                raise ValueError("Dialogue must name a speaker followed by a colon")
+            previous_speaker, previous_line = result[-1]
+            result[-1] = (previous_speaker, previous_line + " " + raw.strip())
+            continue
+        result.append((speaker.strip(), line.strip()))
+    return result

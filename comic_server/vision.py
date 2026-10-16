@@ -101,7 +101,8 @@ class CharacterVision:
             if not refs:
                 checks.append({"character":"","cosineSimilarity":None,"status":"unverified","notice":"No single detectable face in the selected character references; review manually."})
         protected=[face["rect"] for face in faces]
-        positions=suggest_positions(content,[panel.caption,panel.dialogue],protected)
+        from .models import dialogue_lines
+        positions=suggest_positions(content,[panel.caption]+[line for _,line in dialogue_lines(panel.dialogue)],protected)
         return {"model":self.version,"protectedRegions":protected,"landmarks":[f["landmarks"] for f in faces],
             "characterChecks":checks,"balloons":positions,
             "reviewRequired":not faces or any(c["status"]!="approved_by_user" for c in checks),

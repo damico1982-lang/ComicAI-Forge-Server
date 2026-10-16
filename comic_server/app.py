@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 from . import uploads
 
-from .models import GenerationRequest, LoginRequest, Storyboard, StoryboardEdit, ArtworkApproval, validate_storyboard
+from .models import GenerationRequest, LoginRequest, Storyboard, StoryboardEdit, ArtworkApproval, validate_storyboard, dialogue_lines
 from .estimates import quote, revision
 from .provider import OpenAIProvider
 from .store import Store
@@ -37,7 +37,7 @@ def create_app(directory=None, public_url=None, provider=None):
         worker.close()
         app.state.print_executor.shutdown(wait=False,cancel_futures=True)
 
-    app = FastAPI(title="ComicAI Forge", version="1.3.0", lifespan=lifespan)
+    app = FastAPI(title="ComicAI Forge", version="1.3.1", lifespan=lifespan)
     app.state.store = store
     app.state.worker = worker
 
@@ -84,10 +84,9 @@ def create_app(directory=None, public_url=None, provider=None):
                         "advanceCues": {"triggerType": trigger, "autoDelayMs": delay, "stepIndex": order}})
                 if panel.caption.strip():
                     add_line(panel.caption, "Narrator", "THOUGHT", 0.04)
-                if panel.dialogue.strip():
-                    speaker, separator, line = panel.dialogue.partition(":")
-                    add_line(line.strip() if separator else panel.dialogue, speaker.strip() if separator else "Speaker",
-                        panel.bubbleType, 0.65, panel.advanceTrigger, panel.durationMillis, slot=1)
+                for slot, (speaker, line) in enumerate(dialogue_lines(panel.dialogue), start=1):
+                    add_line(line, speaker, panel.bubbleType, min(.85, .35 + (slot-1)*.12),
+                        panel.advanceTrigger, panel.durationMillis, slot=slot)
                 panels.append({"panelIndex": index, "description": panel.description, "dialogues": dialogues,
                     "imageUrl": f"{public_url}/v1/images/{job['id']}/{number}.png?expires={expires}&signature={signature}",
                     "boundingBox": bounds[index], "protectedRegions": analysis.get("protectedRegions",[]),
@@ -119,8 +118,8 @@ def create_app(directory=None, public_url=None, provider=None):
 
     @app.get("/v1/capabilities")
     def capabilities():
-        return {"serverVersion": "1.3.0", "storyboardApproval": True, "autoPanelCount": True, "styleReferences": True, "cmykPrintExport": True, "characterVision": True, "panelsPerPage": [3, 4, 5, 6],
-                "layouts": ["GRID", "CINEMATIC"], "maximumPages": 35}
+        return {"serverVersion": "1.3.1", "storyboardApproval": True, "autoPanelCount": True, "styleReferences": True, "cmykPrintExport": True, "characterVision": True, "panelsPerPage": [3, 4, 5, 6],
+                "layouts": ["GRID", "CINEMATIC"], "maximumPages": 35, "maximumScriptCharacters": 200000, "multiSpeakerBalloons": True}
 
     @app.get("/v1/mobile-release")
     def mobile_release():
