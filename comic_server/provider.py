@@ -12,6 +12,7 @@ from PIL import Image
 
 from .models import Storyboard, validate_storyboard
 from .planner_contract import output_schema, parse_storyboard, validation_detail
+from .layouts import image_size
 
 
 class ProviderError(RuntimeError):
@@ -144,7 +145,7 @@ class OpenAIProvider:
             raise ProviderError(f"Storyboard validation failed in pages {first_page}-{first_page+request.targetPageCount-1}: {detail}. No panel images were requested. Completed planning sections are saved; use Resume to retry only the unfinished section. Planning retries may incur text-model charges.") from exc
 
     def image(self, panel, bible, style, references=None, aspect_ratio=595 / 842):
-        size = "1536x1024" if aspect_ratio >= 1.2 else "1024x1536" if aspect_ratio <= 0.85 else "1024x1024"
+        size = image_size(aspect_ratio)
         prompt = (
             "Draw one finished comic panel, without borders, lettering, speech balloons or captions. "
             "All text is added separately by the application. Keep important faces inside the central 75% of "

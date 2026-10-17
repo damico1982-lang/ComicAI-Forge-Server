@@ -37,7 +37,7 @@ def create_app(directory=None, public_url=None, provider=None):
         worker.close()
         app.state.print_executor.shutdown(wait=False,cancel_futures=True)
 
-    app = FastAPI(title="ComicAI Forge", version="1.3.4", lifespan=lifespan)
+    app = FastAPI(title="ComicAI Forge", version="1.3.5", lifespan=lifespan)
     app.state.store = store
     app.state.worker = worker
 
@@ -100,6 +100,11 @@ def create_app(directory=None, public_url=None, provider=None):
         return {"projectId": job["id"], "totalPages": len(pages), "targetAspectRatio": 595 / 842,
             "parsedPages": pages, "attachments": attachments}
 
+    def generation_quote(job, request, board):
+        images = sum(1 for ref in request.attachments if ref.useForAi
+                     and (store.upload(str(ref.id), job["username"]) or {}).get("kind") == "image")
+        return quote(request, board, provider, job["completed"], reference_images=images)
+
     def summary(job, include_result=False):
         data = {"jobId": job["id"], "status": job["status"],
             "completedPanels": job["completed"], "totalPanels": job["total"], "error": job["error"],
@@ -107,7 +112,7 @@ def create_app(directory=None, public_url=None, provider=None):
         request = GenerationRequest.model_validate_json(job["payload"])
         if include_result and job["plan"] and request.requireArtworkApproval:
             board = Storyboard.model_validate_json(job["plan"])
-            data.update(storyboard=board.model_dump(), revision=revision(job["plan"]), estimate=quote(request,board,provider,job["completed"]))
+            data.update(storyboard=board.model_dump(), revision=revision(job["plan"]), estimate=generation_quote(job,request,board))
         if include_result and job["status"] == "completed":
             data["result"] = result(job)
         return data
@@ -118,7 +123,7 @@ def create_app(directory=None, public_url=None, provider=None):
 
     @app.get("/v1/capabilities")
     def capabilities():
-        return {"serverVersion": "1.3.4", "storyboardApproval": True, "autoPanelCount": True, "styleReferences": True, "cmykPrintExport": True, "characterVision": True, "panelsPerPage": [3, 4, 5, 6],
+        return {"serverVersion": "1.3.5", "storyboardApproval": True, "itemizedPricing": True, "autoPanelCount": True, "styleReferences": True, "cmykPrintExport": True, "characterVision": True, "panelsPerPage": [3, 4, 5, 6],
                 "layouts": ["GRID", "CINEMATIC"], "maximumPages": 35, "maximumScriptCharacters": 200000, "multiSpeakerBalloons": True}
 
     @app.get("/v1/mobile-release")
@@ -312,7 +317,7 @@ def create_app(directory=None, public_url=None, provider=None):
             if job["status"] != "awaiting_approval":
                 raise HTTPException(409,"This job is not awaiting artwork approval")
             request=GenerationRequest.model_validate_json(job["payload"])
-            estimate=quote(request,Storyboard.model_validate_json(job["plan"]),provider,job["completed"])
+            estimate=generation_quote(job,request,Storyboard.model_validate_json(job["plan"]))
             if not estimate["available"]:
                 raise HTTPException(422,estimate["reason"])
             if Decimal(body.approvedEstimateHigh)<Decimal(estimate["estimatedHigh"]):

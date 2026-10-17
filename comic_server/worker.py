@@ -7,7 +7,7 @@ from pathlib import Path
 from .models import GenerationRequest, Storyboard, validate_storyboard
 from .provider import ProviderError, OpenAIProvider
 from .uploads import references
-from .layouts import panel_layout
+from .layouts import panel_layout, panel_aspect_ratio
 from .estimates import revision
 
 
@@ -87,7 +87,7 @@ class Worker:
                     destination = folder / f"{number}.png"
                     if not destination.exists():
                         box = bounds[panel_index]
-                        ratio = (595 / 842) * (box["xMax"] - box["xMin"]) / (box["yMax"] - box["yMin"])
+                        ratio = panel_aspect_ratio(box)
                         content = self.provider.image(panel, board.characterBible, request.selectedArtStyle,
                                                       references=reference_files, aspect_ratio=ratio)
                         temporary = destination.with_suffix(".tmp")

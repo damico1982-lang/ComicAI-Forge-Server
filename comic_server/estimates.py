@@ -1,41 +1,59 @@
-"""Reviewable estimates, not an account balance or a provider-enforced charge cap."""
+"""Itemized provider-rate calculations; variable input charges are not an invoice."""
 import hashlib
 import json
+from collections import Counter
 from decimal import Decimal, ROUND_CEILING
 
-PRICING_DATE = "2026-10-15"
+from .layouts import panel_layout, panel_aspect_ratio, image_size
+
+PRICING_DATE = "2026-10-17"
 IMAGE_SOURCE = "https://developers.openai.com/api/docs/models/gpt-image-1"
 TEXT_SOURCE = "https://developers.openai.com/api/docs/models/gpt-4.1-mini"
+OUTPUT_RATES = {"1024x1024": Decimal(".167"), "1024x1536": Decimal(".250"), "1536x1024": Decimal(".250")}
 
 
 def revision(plan):
     return hashlib.sha256(json.dumps(json.loads(plan), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def quote(request, board, provider, completed=0):
+def amount(value, places=".01"):
+    return str(value.quantize(Decimal(places), rounding=ROUND_CEILING))
+
+
+def quote(request, board, provider, completed=0, reference_images=None):
     if getattr(provider, "image_model", "gpt-image-1") != "gpt-image-1" or getattr(provider, "text_model", "gpt-4.1-mini") != "gpt-4.1-mini":
         return {"available": False, "reason": "Pricing for the configured models must be reviewed before approval.", "currency": "USD"}
-    photos = sum(1 for r in request.attachments if r.useForAi and r.role in {"CHARACTER", "LOCATION", "STYLE"})
-    total = sum(len(p.panels) for p in board.pages)
-    remaining = max(0, total - completed)
-    # Exact sizes are selected from panel aspect ratios. Use all-square to all-portrait
-    # output bounds; inputs, reference tokens and planning are separately disclosed.
-    output_low = Decimal(".167") * remaining
-    output_high = Decimal(".250") * remaining
-    # Input usage is variable. This allowance is deliberately a range, never an invoice.
+    # Production supplies upload kinds: every selected image is sent to image edits,
+    # including images labeled DOCUMENT; text references are not image inputs.
+    photos = reference_images if reference_images is not None else sum(r.useForAi for r in request.attachments)
+    sizes = [image_size(panel_aspect_ratio(box)) for page in board.pages
+             for box in panel_layout(len(page.panels), request.layoutStyle)]
+    total = len(sizes)
+    completed = max(0, min(total, completed))
+    counts = Counter(sizes[completed:])
+    remaining = total - completed
+    output = sum((OUTPUT_RATES[size] * count for size, count in counts.items()), Decimal(0))
+    # These remain explicitly variable allowances, not measured input usage.
     reference_low = Decimal(".01") * photos * remaining
     reference_high = Decimal(".20") * photos * remaining
     prompt_allowance = Decimal(".02") * remaining
-    def amount(n):
-        return str(n.quantize(Decimal(".01"), rounding=ROUND_CEILING))
+    output_rounded = Decimal(amount(output))
+    low = output_rounded + reference_low
+    high = output_rounded + reference_high + prompt_allowance
+    lines = [{"id": size, "label": f"{size} high-quality image output", "quantity": count,
+              "unitPrice": amount(OUTPUT_RATES[size], ".001"), "subtotal": amount(OUTPUT_RATES[size] * count, ".001")}
+             for size, count in sorted(counts.items())]
     return {"available": True, "currency": "USD", "pricingDate": PRICING_DATE,
         "imageModel": provider.image_model, "textModel": provider.text_model, "quality": "high",
-        "totalImages": total, "remainingImages": remaining, "referenceImages": photos,
-        "imageOutputLow": amount(output_low), "imageOutputHigh": amount(output_high),
+        "totalImages": total, "remainingImages": remaining, "completedImages": completed, "referenceImages": photos,
+        "outputLineItems": lines, "imageOutputSubtotal": amount(output, ".001"),
+        "imageOutputLow": amount(output), "imageOutputHigh": amount(output),
+        "roundingAdjustment": amount(output_rounded - output, ".001"),
         "referenceAllowanceLow": amount(reference_low), "referenceAllowanceHigh": amount(reference_high),
         "promptAndVisionAllowance": amount(prompt_allowance),
-        "estimatedLow": amount(output_low + reference_low),
-        "estimatedHigh": amount(output_high + reference_high + prompt_allowance),
+        "estimatedLow": amount(low), "estimatedHigh": amount(high),
+        "approvalAmount": amount(high), "totalIsExact": False,
         "planningAlreadyRequested": True,
-        "notice": "Estimate for remaining artwork, not an invoice or guaranteed cap. Planning was a separate paid text request. Actual input/vision usage, retries and billing can vary. No automatic paid retries.",
+        "planningNotice": "Planning was requested separately before this review. Its charge is not included and is not measured here.",
+        "notice": "Image-output subtotal is calculated from published rates and the planned image sizes. Total is an estimate, not a fixed price, invoice or guaranteed cap. Reference and prompt inputs are variable. Final charges come from provider billing; retries may cost extra. No automatic paid retries.",
         "sources": [IMAGE_SOURCE, TEXT_SOURCE]}

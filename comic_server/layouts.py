@@ -1,6 +1,15 @@
 """Normalized, non-overlapping page layouts; matching templates live in Android."""
 
 
+def panel_aspect_ratio(box):
+    return (595 / 842) * (box["xMax"] - box["xMin"]) / (box["yMax"] - box["yMin"])
+
+
+def image_size(aspect_ratio):
+    """One source of truth for the provider request and its output-price quote."""
+    return "1536x1024" if aspect_ratio >= 1.2 else "1024x1536" if aspect_ratio <= 0.85 else "1024x1024"
+
+
 def panel_layout(count, style="GRID"):
     if count not in range(3, 7) or style not in {"GRID", "CINEMATIC"}:
         raise ValueError("Choose 3–6 panels and GRID or CINEMATIC")
